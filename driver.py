@@ -7,6 +7,11 @@ from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoSuchElementException
 
 import heapq
+
+
+# TODO replace all of the time.sleeps with awaits so that it is a little faster
+
+
 """
     Driver for contexto, to run, must first activate virtual environment
     and then have the correct web drivers installed
@@ -29,6 +34,8 @@ class Driver():
         self.guessesHeap = []
         self.numGuesses = 0
         self.driver = None
+        self.initialGameNumber = -1
+        self.currentGameNumber = -1
         print(f"Initing with {driverType} drive Type")
         if driverType == "Chrome":
             self.driver = webdriver.Chrome()
@@ -46,6 +53,7 @@ class Driver():
 # Fetches site from url
         siteURL = "https://contexto.me/"
         self.driver.get(siteURL)
+        self.initialGameNumber = self.getCurrentGameNumber()
 
     """
         Guesses a word based on the string input, this is just for a single
@@ -61,7 +69,7 @@ class Driver():
         wordBoxDomName = "word"
         inputElem = self.driver.find_element(By.NAME, wordBoxDomName)
         inputElem.send_keys(word, Keys.ENTER)
-        time.sleep(2)
+        time.sleep(1)
         # get the most recent words score and value
         recentGuessScore, recentGuessWord = self.getRecentGuess()
         print(f"Recent: {recentGuessWord}")
@@ -161,6 +169,58 @@ class Driver():
 
         return (guessScore, guessText)
 
+    def getCurrentGameNumber(self):
+        infoBarDivClassName = 'info-bar'
+        infoBarDiv = self.driver.find_element(
+            By.CLASS_NAME, infoBarDivClassName)
+
+        # find spans in this div, second oen has the number
+        infoBarSpans = infoBarDiv.find_elements(By.TAG_NAME, 'span')
+        gameNumberAsString = infoBarSpans[1].text
+        # can be used to update game number, or can use counter
+        numberGuessesAsString = infoBarSpans[3].text
+        gameNumber = int(gameNumberAsString[1:])
+
+        # this is to get my vim to shut up about unused variable, ignore
+        _ = numberGuessesAsString
+
+        # Return game number after cast to int
+        return gameNumber
+
+    # Select game number,  if you leave gameNumber blank, it will
+    # choose random, which would probably be better and faster
+    def selectGameByGameNumber(self, gameNumber=None):
+        print(f"Selecting game number: {gameNumber}")
+        # select ... button in the top bar to open menu
+        topBarDiv = self.driver.find_element(By.CLASS_NAME, 'top-bar')
+        topBarDiv.find_element(By.TAG_NAME, 'button').click()
+        time.sleep(0.5)
+        dropDownDiv = topBarDiv.find_element(By.CLASS_NAME, 'dropdown')
+        menuOptions = dropDownDiv.find_elements(By.CLASS_NAME, 'menu-item')
+
+        # Previous games option is the 4th option
+        menuOptions[3].click()
+
+        # Modal wrapper contains all of the games and their buttons
+        modalWrapperDiv = self.driver.find_element(
+            By.CLASS_NAME, 'modal-wrapper')
+
+        # Would probably be better to just click the random button every time for this when
+        # Training the model, it is the first button that appears
+
+        if gameNumber is not None:
+            gameOptions = modalWrapperDiv.find_elements(
+                By.CLASS_NAME, 'button')
+
+            # Game number would be the initialGameNumber - gameNumber + 1
+            # 1 is to account for the random button at top
+
+            gameOptionsIndex = self.initialGameNumber - gameNumber + 1
+            gameOptions[gameOptionsIndex].click()
+        else:
+            # Just get the first div instead of the massive array
+            modalWrapperDiv.find_element(By.CLASS_NAME, 'button').click()
+
     """
         Helpers:
         printGuesses: print the set of all guesses
@@ -176,14 +236,18 @@ class Driver():
 
 if __name__ == "__main__":
     guesses = ["Hello", "again", "test", "boat", "table"]
-    contDriver = Driver("Firefox")
-    contDriver.guessWords(guesses)
-    print(f"Heap: {contDriver.guessesHeap}")
-    contDriver.getAllGuesses()
-    contDriver.printGuesses()
-    print(f"Best guess: {contDriver.getBestGuess()}")
-    print(contDriver.numGuesses)
+    cd = Driver("Firefox")
+    cd.selectGameByGameNumber()
 
-    # print(f"isGameOver: {contDriver.checkIfGameOver()}")
-    # contDriver.guessWord("counter")
-    # print(f"isGameOver: {contDriver.checkIfGameOver()}")
+    time.sleep(3)
+    cd.quitDriver()
+    # cd.guessWords(guesses)
+    # print(f"Heap: {cd.guessesHeap}")
+    # cd.getAllGuesses()
+    # cd.printGuesses()
+    # print(f"Best guess: {cd.getBestGuess()}")
+    # print(cd.numGuesses)
+    #
+    # print(f"isGameOver: {cd.checkIfGameOver()}")
+    # cd.guessWord("counter")
+    # print(f"isGameOver: {cd.checkIfGameOver()}")
