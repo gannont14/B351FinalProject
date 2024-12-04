@@ -1,6 +1,5 @@
 import time
 
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -69,7 +68,7 @@ class Driver():
         wordBoxDomName = "word"
         inputElem = self.driver.find_element(By.NAME, wordBoxDomName)
         inputElem.send_keys(word, Keys.ENTER)
-        time.sleep(1)
+        time.sleep(0.25)
         # get the most recent words score and value
         recentGuessScore, recentGuessWord = self.getRecentGuess()
         print(f"Recent: {recentGuessWord}")
