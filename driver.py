@@ -1,13 +1,14 @@
 import time
-
-
+from selenium.webdriver.support import expected_conditions as EC
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.chrome.options import Options
 
 import heapq
 
+from selenium.webdriver.support.wait import WebDriverWait
 
 # TODO replace all of the time.sleeps with awaits so that it is a little faster
 
@@ -37,8 +38,20 @@ class Driver():
         self.initialGameNumber = -1
         self.currentGameNumber = -1
         print(f"Initing with {driverType} drive Type")
+
+        # Initialize driver based on type
+        # Initialize driver based on type
         if driverType == "Chrome":
-            self.driver = webdriver.Chrome()
+            options = Options()
+            options.add_argument("--disable-gpu")  # Disable GPU acceleration for stability
+            options.add_argument("--no-sandbox")  # Bypass OS security model
+            options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource issues
+            options.add_argument("--disable-extensions")  # Disable unnecessary extensions
+            options.add_experimental_option("excludeSwitches", ["enable-logging"])
+            options.add_experimental_option(
+                "prefs", {"profile.managed_default_content_settings.ads": 2}
+            )  # Block ads
+            self.driver = webdriver.Chrome(options=options)
         elif driverType == "Firefox":
             self.driver = webdriver.Firefox()
         elif driverType == "Edge":
@@ -46,11 +59,10 @@ class Driver():
         elif driverType == "Safari":
             self.driver = webdriver.Safari()
         else:
-            print("Ivalid Driver type")
+            print("Invalid driver type")
             return
 
-
-# Fetches site from url
+        # Fetches site from url
         siteURL = "https://contexto.me/"
         self.driver.get(siteURL)
         self.initialGameNumber = self.getCurrentGameNumber()
@@ -69,7 +81,12 @@ class Driver():
         wordBoxDomName = "word"
         inputElem = self.driver.find_element(By.NAME, wordBoxDomName)
         inputElem.send_keys(word, Keys.ENTER)
-        time.sleep(1)
+        # Wait for the recent guess row to appear
+        WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "row"))
+        )
+
+        recentGuessScore, recentGuessWord = self.getRecentGuess()
         # get the most recent words score and value
         recentGuessScore, recentGuessWord = self.getRecentGuess()
         print(f"Recent: {recentGuessWord}")
@@ -128,8 +145,9 @@ class Driver():
         # In the div with messages className, there is a row for the mosot recent guess
         try:
             messagesClassName = 'message'
-            messagesDiv = self.driver.find_element(
-                By.CLASS_NAME, messagesClassName)
+            messagesDiv = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "message"))
+            )
             # Get the row in this div
             recentGuessRow = messagesDiv.find_element(By.CLASS_NAME, "row")
             # Get the two spans within that class
@@ -194,8 +212,10 @@ class Driver():
         # select ... button in the top bar to open menu
         topBarDiv = self.driver.find_element(By.CLASS_NAME, 'top-bar')
         topBarDiv.find_element(By.TAG_NAME, 'button').click()
-        time.sleep(0.5)
-        dropDownDiv = topBarDiv.find_element(By.CLASS_NAME, 'dropdown')
+        # Wait for the dropdown to become visible
+        dropDownDiv = WebDriverWait(self.driver, 10).until(
+            EC.visibility_of_element_located((By.CLASS_NAME, 'dropdown'))
+        )
         menuOptions = dropDownDiv.find_elements(By.CLASS_NAME, 'menu-item')
 
         # Previous games option is the 4th option
@@ -236,8 +256,8 @@ class Driver():
 
 if __name__ == "__main__":
     guesses = ["Hello", "again", "test", "boat", "table"]
-    cd = Driver("Firefox")
-    cd.selectGameByGameNumber()
+    cd = Driver("Chrome")
+    cd.selectGameByGameNumber(200)
 
     time.sleep(3)
     cd.quitDriver()
