@@ -29,7 +29,7 @@ class ContextoSolver:
         except Exception as e:
             logging.error(f"Error loading English words: {e}")
             # Fallback to a basic common words list
-            self.english_words = set(api.load('models/word2vec-google-news-300').index_to_key[:50000])
+            self.english_words = set(api.load('models/word2vec-google-news-300').index_to_key[:80000])
 
         self.setup_logging()
 
@@ -145,6 +145,7 @@ class ContextoSolver:
                 logging.warning("No candidates available")
                 consecutive_failures += 1
                 if consecutive_failures > 5:
+                    print("Failed too many times ----------------")
                     # Fallback to common English words
                     common_words = ["world", "life", "work", "place", "system",
                                     "group", "number", "point", "word", "state",
@@ -152,7 +153,8 @@ class ContextoSolver:
                                     "question", "story", "example", "house", "business"]
                     candidates = [(w, 0) for w in common_words if w not in self.tried_words]
                     # Change the number of seeds every time, can either double or just add, going to add first
-                    # self.num_seeds += 1
+                    self.num_seeds += 1
+                    consecutive_failures = 0
                 if not candidates:
                     continue
 

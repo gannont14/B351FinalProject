@@ -1,4 +1,5 @@
 import time
+import requests
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -25,6 +26,7 @@ class Driver():
     """
 
     def __init__(self, driverType="Chrome"):
+        self.apiBaseURL = "https://api.contexto.me/machado/en/game/"
         # Creates driver based on browser
         # Could be updated to max heap instead of set
         self.guesses = {}
@@ -53,6 +55,18 @@ class Driver():
         siteURL = "https://contexto.me/"
         self.driver.get(siteURL)
         self.initialGameNumber = self.getCurrentGameNumber()
+
+    def guessWordAPI(self, word):
+        url = f"{self.apiBaseURL}{str(self.currentGameNumber)}/{str(word)}"
+        # Error
+        response = requests.get(url)
+        if response.status_code == 200:
+            # Success
+            data = response.json()
+            return data['word'], int(data['distance'])
+
+        # Error
+        return None, None
 
     """
         Guesses a word based on the string input, this is just for a single
