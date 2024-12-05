@@ -243,8 +243,13 @@ class Driver():
     def printGuesses(self):
         print(f"Guesses: {self.guesses}")
 
-    def quitDriver(self):
+    def quitDriver(self, guesses):
+        print(f"guesses: {guesses}")
         self.driver.quit()
+
+    def log(logTitle, guesses):
+        # ther eis logging built into tyis alreayd so just pass
+        pass
 
 
 if __name__ == "__main__":
