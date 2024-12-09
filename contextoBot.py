@@ -11,9 +11,11 @@ from apiDriver import APIDriver
 class ContextoSolver:
     def __init__(self, webDriver="Firefox", gameNumber=None):
         self.word_model = api.load('word2vec-google-news-300')
-        self.max_guesses = 300
+        self.max_guesses = 100
         self.guesses_dict = {}
         self.tried_words = set()
+        self.failed_refinements = set()  # Track word combinations that led nowhere
+        self.stuck_counter = 0  # Track how many times we've been stuck in refinement
 
         # updated to be able to use the API driver as well
         if webDriver == "API":
@@ -124,6 +126,13 @@ class ContextoSolver:
     def make_next_guess_refined(self, topn=100, score_threshold=100):
         best_score = min(self.guesses_dict.values()) if self.guesses_dict else float('inf')
         best_word = min(self.guesses_dict.items(), key=lambda x: x[1])[0] if self.guesses_dict else None
+        candidates = []  # Initialize candidates here
+
+        # If we've been stuck too long, temporarily exit refinement
+        if self.stuck_counter > 5:
+            logging.info("Been stuck in refinement too long, trying directional approach")
+            self.stuck_counter = 0  # Reset counter
+            return self.make_next_guess_directional(topn)
 
         # Ultra-fine refinement for very good scores
         if best_score <= 20:
@@ -141,54 +150,35 @@ class ContextoSolver:
                     logging.info(f"Last guess '{last_word}' (score: {last_score}) was much worse. Reversing direction.")
 
                     try:
-                        # Get vectors and move in opposite direction
                         best_vector = self.word_model[best_word]
                         last_vector = self.word_model[last_word]
-
-                        # Create multiple small steps in opposite direction
                         direction = best_vector - last_vector
-                        candidates = []
+                        candidates = []  # Reset candidates
 
                         # Try multiple small steps in opposite direction
-                        for step in [0.05, 0.1, 0.15]:
+                        for step in [0.05, 0.1, 0.15, 0.2, 0.25]:  # Added more steps
                             new_vector = best_vector + (direction * step)
                             new_vector = new_vector / np.linalg.norm(new_vector)
                             similar = self.word_model.similar_by_vector(new_vector, topn=20)
                             candidates.extend([(word, score) for word, score in similar
-                                               if self.is_valid_word(word)])
+                                               if self.is_valid_word(word) and word not in self.failed_refinements])
 
                         if candidates:
                             return candidates[:topn]
                     except Exception as e:
                         logging.error(f"Error in direction reversal: {e}")
 
-            # Very fine exploration around best word
-            try:
-                steps = [0.05, 0.1, 0.15]
-                candidates = []
-                base_vector = self.word_model[best_word]
-
-                for step in steps:
-                    # Explore multiple directions around the best word
-                    for angle in [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi]:
-                        # Create a slightly rotated version of the vector
-                        rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)],
-                                                    [np.sin(angle), np.cos(angle)]])
-                        rotated_direction = np.dot(rotation_matrix, base_vector[:2])
-                        new_vector = base_vector.copy()
-                        new_vector[:2] = rotated_direction
-                        new_vector = new_vector + (new_vector * step)
-                        new_vector = new_vector / np.linalg.norm(new_vector)
-
-                        similar = self.word_model.similar_by_vector(new_vector, topn=10)
-                        candidates.extend([(word, score) for word, score in similar
-                                           if self.is_valid_word(word)])
-
-                if candidates:
-                    return candidates[:topn]
-
-            except Exception as e:
-                logging.error(f"Error in ultra-fine refinement: {e}")
+            # Fallback approach when stuck
+            if not candidates:
+                try:
+                    logging.info("Trying semantic neighbors of best word")
+                    neighbors = self.word_model.most_similar(best_word, topn=50)
+                    candidates = [(word, score) for word, score in neighbors
+                                  if self.is_valid_word(word) and word not in self.failed_refinements]
+                    if candidates:
+                        return candidates[:topn]
+                except Exception as e:
+                    logging.error(f"Error in neighbor search: {e}")
 
         # Regular refinement for good but not excellent scores
         good_words = [(word, score) for word, score in self.guesses_dict.items()
@@ -204,7 +194,7 @@ class ContextoSolver:
         logging.info(f"Using weighted refinement with words: {weights}")
 
         try:
-            candidates = []
+            candidates = []  # Reset candidates
             steps = [0.1, 0.15, 0.2, 0.25, 0.3]
 
             for word, weight in weights:
@@ -234,6 +224,12 @@ class ContextoSolver:
             unique_candidates = [(word, score) for word, score in seen.items()]
             unique_candidates.sort(key=lambda x: x[1], reverse=True)
 
+            if not candidates:
+                self.stuck_counter += 1
+                logging.info(f"No candidates found, stuck counter: {self.stuck_counter}")
+            else:
+                self.stuck_counter = 0  # Reset when we find candidates
+
             return unique_candidates[:topn]
 
         except Exception as e:
@@ -241,7 +237,8 @@ class ContextoSolver:
             return []
 
     def play_game(self):
-        initial_probes = ['thing', 'place', 'time', 'person', 'animal', 'acorn']
+        initial_probes = ['thing', 'place', 'time', 'person', 'animal',
+                          'nature', 'food', 'action', 'object']
         logging.info("Starting game with probe words: " + str(initial_probes))
 
         for guess in initial_probes:
@@ -256,29 +253,73 @@ class ContextoSolver:
         consecutive_failures = 0
         guess_count = len(self.guesses_dict)
         in_refinement_phase = False
+        refinement_attempts = 0
+        no_candidates_streak = 0  # Track consecutive "no candidates" results
+        phase_switches = 0  # Track number of phase switches
+        last_phase_switch_time = time.time()  # Track timing of phase switches
 
         while not self.driver.checkIfGameOver() and guess_count < self.max_guesses:
+            current_time = time.time()
             current_best_score = min(self.guesses_dict.values()) if self.guesses_dict else float('inf')
 
+            # Check for being stuck in a cycle
+            if no_candidates_streak > 50:  # If we've failed to find candidates 50 times in a row
+                logging.info("Detected being stuck with no candidates. Ending game.")
+                break
+
+            # Check for rapid phase switching
+            if current_time - last_phase_switch_time < 5:  # If less than 5 seconds between phase switches
+                phase_switches += 1
+                if phase_switches > 10:  # If we've switched phases rapidly more than 10 times
+                    logging.info("Detected rapid phase switching cycle. Ending game.")
+                    break
+            else:
+                phase_switches = 0  # Reset if switches aren't rapid
+
+            # Phase switching logic
             if current_best_score < 100 and not in_refinement_phase:
                 logging.info(f"Switching to refinement phase! Best score: {current_best_score}")
                 in_refinement_phase = True
+                refinement_attempts = 0
+                last_phase_switch_time = current_time
 
             if in_refinement_phase:
-                logging.info(f"Using refinement strategy (best score: {current_best_score})")
+                refinement_attempts += 1
+                if refinement_attempts > 20:
+                    logging.info("Been in refinement phase too long, switching to directional")
+                    in_refinement_phase = False
+                    last_phase_switch_time = current_time
+                    self.failed_refinements.update(word for word, _ in sorted(self.guesses_dict.items(),
+                                                                              key=lambda x: x[1])[:3])
+                    continue
+
                 candidates = self.make_next_guess_refined(topn=100)
             else:
-                logging.info("Using directional strategy")
                 candidates = self.make_next_guess_directional(topn=100)
 
             if not candidates:
-                logging.warning("No candidates available")
+                no_candidates_streak += 1
+                logging.warning(f"No candidates available (streak: {no_candidates_streak})")
                 consecutive_failures += 1
                 if consecutive_failures > 5:
-                    common_words = ["world", "life", "work", "system", "group"]
-                    candidates = [(w, 0) for w in common_words if w not in self.tried_words]
+                    if in_refinement_phase:
+                        in_refinement_phase = False
+                        last_phase_switch_time = current_time
+                        logging.info("Switching out of refinement phase due to consecutive failures")
+
+                    # Use different fallback words based on best scores
+                    if current_best_score < 200:
+                        fallback_words = ["look", "watch", "view", "notice", "observe",
+                                          "sense", "detect", "spot", "find", "perceive"]
+                    else:
+                        fallback_words = ["world", "life", "work", "system", "group",
+                                          "nature", "form", "type", "kind", "state"]
+
+                    candidates = [(w, 0) for w in fallback_words if w not in self.tried_words]
                 if not candidates:
                     continue
+            else:
+                no_candidates_streak = 0  # Reset the streak when we find candidates
 
             next_guesses = self.make_diverse_guesses(candidates, n_clusters=3)
 
@@ -318,7 +359,7 @@ class ContextoSolver:
 
 
 def main():
-    solver = ContextoSolver()
+    solver = ContextoSolver(webDriver="API")  # Changed to use API driver by default
     try:
         guesses = solver.play_game()
         print(f"Game finished in {guesses} guesses")
@@ -326,7 +367,7 @@ def main():
         logging.error(f"Error during game: {e}")
     finally:
         solver.cleanup()
-        solver.log(logTitle, guesses)
+        solver.log("Game Run", guesses)
 
 
 if __name__ == "__main__":

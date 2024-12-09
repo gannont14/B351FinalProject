@@ -1,5 +1,7 @@
 import requests
 import random
+from datetime import datetime
+import json
 
 
 class APIDriver:
@@ -50,9 +52,19 @@ class APIDriver:
         # log the amount of guesses
         print("Quitting driver")
 
-    def log(self, logTitle, guesses):
-        with open('log.txt', 'a') as f:
-            f.write(f"{logTitle} - {guesses} guesses")
+    # def log(self, logTitle, guesses):
+    #     with open('log.txt', 'a') as f:
+    def log(self, title, num_guesses):
+        log_data = {
+            'game_number': self.gameNum,
+            'title': title,
+            'total_guesses': num_guesses
+            # 'guesses': self.game_log
+        }
+
+        filename = f"game_logs/game_{self.gameNum}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(filename, 'w') as f:
+            json.dump(log_data, f, indent=2)  # f.write(f"{logTitle} - {guesses} guesses")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ from contextoBot import ContextoSolver
 import logging
 
 if __name__ == "__main__":
-    solver = ContextoSolver()
+    solver = ContextoSolver(randomGame=True)
     try:
         guesses = solver.play_game()
         print(f"Game finished in {guesses} guesses")
