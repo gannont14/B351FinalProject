@@ -6,6 +6,15 @@ __pycache__/
 # C extensions
 *.so
 
+wikiVectorModel.model
+sklearn-track/wikiVectorModel.model.syn1neg.py
+sklearn-track/wikiVectorModel.model.wv.vectors.py
+sklearn-track/wikiVectorModel.model.*
+.gitattributes
+oldenv3
+.DS_Store
+
+
 # Distribution / packaging
 .Python
 build/
