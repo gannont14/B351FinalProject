@@ -39,3 +39,5 @@ urllib3==2.2.3
 wrapt==1.17.0
 xxhash==3.5.0
 yarl==1.18.3
+
+selenium~=4.27.1

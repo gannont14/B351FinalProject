@@ -1,9 +1,13 @@
+import random
+
 import numpy as np
 import nltk
 from sklearn.cluster import KMeans
 import time
 import logging
-from driver import Driver
+
+from apiDriver import APIDriver
+from driver import Driver, DriverType
 import gensim.downloader as api
 
 
@@ -219,12 +223,12 @@ class ContextoSolver1:
         self.driver.quitDriver()
 
 
-
 class ContextoSolver2:
-    def __init__(self, webDriver="Firefox", randomGame=True):
+    def __init__(self, webDriver=DriverType.FIREFOX, randomGame=True):
         # Use GloVe instead of Word2Vec
         self.word_model = api.load('glove-wiki-gigaword-300')
-        self.driver = Driver(webDriver)
+        # self.driver = Driver(webDriver)
+        self.driver = APIDriver()
         self.max_guesses = 300
         self.guesses_dict = {}
         self.tried_words = set()
@@ -232,7 +236,8 @@ class ContextoSolver2:
 
         # Choose a random game
         if randomGame:
-            self.driver.selectGameByGameNumber(597)
+            self.driver.selectGameByGameNumber(random.randint(1, 813))
+            print(f"Selected game {self.driver.getCurrentGameNumber()}")
 
         # Download and load English word list
         try:

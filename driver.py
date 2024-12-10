@@ -5,6 +5,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoSuchElementException
 
+from enum import Enum
+
 import heapq
 
 
@@ -18,13 +20,21 @@ import heapq
     """
 
 
-class Driver():
+class DriverType(Enum):
+    CHROME = "Chrome"
+    FIREFOX = "Firefox"
+    EDGE = "Edge"
+    SAFARI = "Safari"
+
+
+# noinspection DuplicatedCode
+class Driver:
     """
     Constructor: create driver, if you don't input any
     parameters will default to chrome
     """
 
-    def __init__(self, driverType="Chrome"):
+    def __init__(self, driverType=DriverType.CHROME):
         # Creates driver based on browser
         # Could be updated to max heap instead of set
         self.guesses = {}
@@ -35,17 +45,17 @@ class Driver():
         self.driver = None
         self.initialGameNumber = -1
         self.currentGameNumber = -1
-        print(f"Initing with {driverType} drive Type")
-        if driverType == "Chrome":
+        print(f"Initializing with {driverType.value} drive Type")
+        if driverType == DriverType.CHROME:
             self.driver = webdriver.Chrome()
-        elif driverType == "Firefox":
+        elif driverType == DriverType.FIREFOX:
             self.driver = webdriver.Firefox()
-        elif driverType == "Edge":
+        elif driverType == DriverType.EDGE:
             self.driver = webdriver.Edge()
-        elif driverType == "Safari":
+        elif driverType == DriverType.SAFARI:
             self.driver = webdriver.Safari()
         else:
-            print("Ivalid Driver type")
+            print("Invalid Driver type")
             return
 
 
@@ -72,17 +82,18 @@ class Driver():
         # get the most recent words score and value
         recentGuessScore, recentGuessWord = self.getRecentGuess()
         print(f"Recent: {recentGuessWord}")
-        # if the guess is 'Too common' the getRecentGuess will instead return 'None', as it is catching
-        # the NoSuchElementException, if it is none, the input text box needs to be cleared so it doesn't mess with the next word
+        # if the guess is 'Too common' the getRecentGuess will instead return 'None', as it is catching the
+        # NoSuchElementException, if it is none, the input text box needs to be cleared, so it doesn't mess with the
+        # next word
         if recentGuessWord is None or recentGuessScore is None:
-            # need to clear the intpu
+            # need to clear the input
             inputElem.clear()
         else:
             heapq.heappush(self.guessesHeap,
                            (recentGuessScore, recentGuessWord))
             self.numGuesses += 1
 
-        return (recentGuessWord, recentGuessScore)
+        return recentGuessWord, recentGuessScore
 
     """
         The same function as above, except takes a list of words, mostly will be used for testing
@@ -100,7 +111,7 @@ class Driver():
         """
 
     def getAllGuesses(self):
-        # Site is comprised of 'guess-history' -> which contains all guess, each guess
+        # Site consists of 'guess-history' -> which contains all guess, each guess
         # is in a 'row-wrapper' div, and one 'row-wrapper current', each row wrapper has a row
         # inside, which contains two spans, being the guess and the score
         guessHistoryElemName = 'guess-history'
@@ -119,12 +130,12 @@ class Driver():
             if guessText not in self.guesses:
                 self.guesses[guessText] = guessScore
         """
-        Gets the most recent guess, which is  the top guess on the website, as well as the score, will return (None,None)
-        if the find_elements throws an NoSuchElementException
+        Gets the most recent guess, which is  the top guess on the website, as well as the score,
+        will return (None,None) if the find_elements throws an NoSuchElementException
         """
 
     def getRecentGuess(self):
-        # In the div with messages className, there is a row for the mosot recent guess
+        # In the div with messages className, there is a row for the most recent guess
         try:
             messagesClassName = 'message'
             messagesDiv = self.driver.find_element(
@@ -139,9 +150,9 @@ class Driver():
             guessScore = int(spans[1].text)
         except NoSuchElementException:
             print("element doesn't exist")
-            return (None, None)
+            return None, None
 
-        return (guessScore, guessText)
+        return guessScore, guessText
 
     """
     Returns boolean of it game is over, can check the guessCount for the amount that it took
@@ -152,7 +163,7 @@ class Driver():
         try:
             chartClassName = 'chart-wrapper'
             # Tries to find the classname for the wrapper, if it doesn't, it
-            # will throw expection If exception is caught, will return false
+            # will throw exception If exception is caught, will return false
             _ = self.driver.find_element(By.CLASS_NAME, chartClassName)
             return True
         except NoSuchElementException:
@@ -166,7 +177,7 @@ class Driver():
         # pop off of the heapq, and set value back to positive
         guessScore, guessText = heapq.heappop(self.guessesHeap)
 
-        return (guessScore, guessText)
+        return guessScore, guessText
 
     def getCurrentGameNumber(self):
         infoBarDivClassName = 'info-bar'
@@ -188,7 +199,7 @@ class Driver():
 
     # Select game number,  if you leave gameNumber blank, it will
     # choose random, which would probably be better and faster
-    def selectGameByGameNumber(self, gameNumber=None):
+    def selectGameByGameNumber(self, gameNumber):
         print(f"Selecting game number: {gameNumber}")
         # select ... button in the top bar to open menu
         topBarDiv = self.driver.find_element(By.CLASS_NAME, 'top-bar')
@@ -200,7 +211,7 @@ class Driver():
         # Previous games option is the 4th option
         menuOptions[3].click()
 
-        # Modal wrapper contains all of the games and their buttons
+        # Modal wrapper contains all the games and their buttons
         modalWrapperDiv = self.driver.find_element(
             By.CLASS_NAME, 'modal-wrapper')
 
@@ -235,18 +246,18 @@ class Driver():
 
 if __name__ == "__main__":
     guesses = ["Hello", "again", "test", "boat", "table"]
-    cd = Driver("Chrome")
-    cd.selectGameByGameNumber()
+    cd = Driver(DriverType.FIREFOX)
+    cd.selectGameByGameNumber(1)
 
     time.sleep(3)
-    cd.quitDriver()
-    # cd.guessWords(guesses)
-    # print(f"Heap: {cd.guessesHeap}")
-    # cd.getAllGuesses()
-    # cd.printGuesses()
-    # print(f"Best guess: {cd.getBestGuess()}")
-    # print(cd.numGuesses)
-    #
-    # print(f"isGameOver: {cd.checkIfGameOver()}")
-    # cd.guessWord("counter")
-    # print(f"isGameOver: {cd.checkIfGameOver()}")
+    # cd.quitDriver()
+    cd.guessWords(guesses)
+    print(f"Heap: {cd.guessesHeap}")
+    cd.getAllGuesses()
+    cd.printGuesses()
+    print(f"Best guess: {cd.getBestGuess()}")
+    print(cd.numGuesses)
+
+    print(f"isGameOver: {cd.checkIfGameOver()}")
+    cd.guessWord("counter")
+    print(f"isGameOver: {cd.checkIfGameOver()}")

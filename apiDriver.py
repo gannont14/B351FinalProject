@@ -4,6 +4,7 @@ import random
 
 class APIDriver:
     def __init__(self, gameNumber=809):
+        self.gameNumber = gameNumber
         self.baseURL = "https://api.contexto.me/machado/en/game/"
         self.gameNum = gameNumber  # This is the game for 12/4, could add logic to increment every day but seems useless
         self.gameOver = False
@@ -41,6 +42,9 @@ class APIDriver:
             gameNum = random.randint(1, 811)
 
         self.gameNumber = gameNum
+
+    def getCurrentGameNumber(self):
+        return self.gameNumber
 
     # This is also kind of redundant, but want it to interface well
     def checkIfGameOver(self):
