@@ -16,18 +16,17 @@ class ContextoSolver:
         vectors = WikipediaVectors()
         if vectors.model is None:
             raise RuntimeError("Failed to load or train Word2Vec model")
-        self.word_model = vectors.model.wv  # Note: we use .wv to get the KeyedVectors
+        self.word_model = vectors.model.wv
         print(f"Total Keys: {len(self.word_model.key_to_index)}")
         self.max_guesses = 150
         self.guesses_dict = {}
         self.tried_words = set()
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))  # Directory of the script
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.contexto_log_file = os.path.join(self.script_dir, "contexto_solver.log")
         self.api_log_file = os.path.join(self.script_dir, "API_results.log")
         self.api_driver_log_file = os.path.join(self.script_dir, "api_driver.log")
         self.game_number = gameNumber
 
-        # updated to be able to use the API driver as well
         if webDriver == "API":
             print("Creating api driver")
             self.driver = APIDriver(gameNumber)
@@ -48,51 +47,223 @@ class ContextoSolver:
             self.english_words = set(api.load('models/word2vec-google-news-300').index_to_key[:50000])
 
         self.setup_logging()
+        self.initialize_probes()
+
+    def initialize_probes(self):
+        """Define and manage multiple sets of probe words."""
+        self.probe_sets = {
+            'general': [
+                'way',      # methods, paths, processes
+                'time',     # temporal concepts, periods
+                'life',     # living things, existence
+                'mind',     # mental concepts, thoughts
+                'work',     # actions, tasks, jobs
+                'part',     # components, pieces
+                'world'     # global concepts, spaces
+            ],
+            'abstract': [
+                'form',     # shapes, structures, types
+                'state',    # conditions, situations
+                'power',    # strength, ability, control
+                'sense',    # perception, meaning
+                'point',    # locations, ideas, purpose
+                'course',   # paths, progression
+                'matter'    # substance, importance
+            ],
+            'conceptual': [
+                'fact',     # truth, information
+                'change',   # transformation, difference
+                'place',    # location, position
+                'rule',     # guidelines, principles
+                'case',     # instances, situations
+                'system',   # organization, structure
+                'level'     # degree, position
+            ]
+        }
+
+    def try_probe_set(self, probe_set, max_probes=5):
+        """Try a specific set of probes and return the best score achieved."""
+        best_score = float('inf')
+        probes_used = 0
+
+        for guess in probe_set:
+            if probes_used >= max_probes:
+                break
+
+            if guess.lower() not in self.tried_words:
+                self.tried_words.add(guess.lower())
+                word, score = self.driver.guessWord(guess)
+
+                if word is not None and score is not None:
+                    self.guesses_dict[word.lower()] = score
+                    logging.info(f"Probe guess: {word} - Score: {score}")
+                    best_score = min(best_score, score)
+                    probes_used += 1
+
+                time.sleep(1)
+
+        return best_score, probes_used
+
+    def adaptive_probing(self):
+        """Adaptively try different probe sets based on results."""
+        # Try initial set
+        current_set = 'general'
+        best_score, probes_used = self.try_probe_set(self.probe_sets[current_set], max_probes=3)
+        total_probes = probes_used
+
+        logging.info(f"Initial probe set '{current_set}' best score: {best_score}")
+
+        # If score isn't promising, try another set
+        if best_score > 1000:  # Threshold for "not promising"
+            remaining_sets = [set_name for set_name in self.probe_sets.keys() if set_name != current_set]
+            for set_name in remaining_sets:
+                if total_probes >= 7:  # Maximum total probes limit
+                    break
+
+                logging.info(f"Trying probe set '{set_name}'")
+                score, probes = self.try_probe_set(self.probe_sets[set_name], max_probes=2)
+                total_probes += probes
+
+                if score < best_score:
+                    best_score = score
+                    current_set = set_name
+
+                if best_score < 500:  # Good enough to proceed
+                    break
+
+        logging.info(f"Completed probing with best score: {best_score}")
+        return best_score
 
     def setup_logging(self):
-        # Configure primary logging for ContextoSolver
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
             handlers=[
-                logging.FileHandler(self.contexto_log_file),  # Logs for ContextoSolver
-                logging.StreamHandler(),  # Console output
+                logging.FileHandler(self.contexto_log_file),
+                logging.StreamHandler(),
             ],
         )
-        print(f"Logging to: {self.contexto_log_file}")  # Debug print
+        print(f"Logging to: {self.contexto_log_file}")
 
-        # Ensure API driver log exists
         if not os.path.exists(self.api_driver_log_file):
             with open(self.api_driver_log_file, 'a') as f:
                 f.write("API Driver Log Initialized\n")
-            print(f"Created {self.api_driver_log_file}")  # Debug print
 
-        # Ensure API results log exists
         if not os.path.exists(self.api_log_file):
             with open(self.api_log_file, 'a') as f:
-                f.write("Timestamp,GameNumber,GuessCount,WinningGuess\n")  # Add CSV header
-            print(f"Created {self.api_log_file}")  # Debug print
-
-    def log_results(self, game_number, guess_count, winning_guess):
-        # Log results in the API log file
-        if not os.path.exists(self.api_log_file):
-            with open(self.api_log_file, "w") as f:
                 f.write("Timestamp,GameNumber,GuessCount,WinningGuess\n")
-            print("Created API results log file.")  # Debug print
 
-        with open(self.api_log_file, "a") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{game_number},{guess_count},{winning_guess}\n")
-        print(f"Logged results to: {self.api_log_file}")  # Debug print
+    def calculate_word_weights(self, sorted_guesses, num_words, score_range, min_score, max_score, is_positive=True):
+        weighted_words = []
+        for word, score in sorted_guesses[:num_words] if is_positive else sorted_guesses[-num_words:]:
+            if is_positive:
+                # For positive words, higher weights for lower scores
+                weight = 1 + (max_score - score) / score_range
+                # Square the weight to emphasize better scores more
+                weight = weight * weight
+            else:
+                # For negative words, lower weights and linear scaling
+                weight = 1 + (score - min_score) / score_range
 
-    def is_valid_word(self, word: str) -> bool:
-        word = word.lower()
-        bad_words = {"first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
-                     "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}
-        return (word in self.english_words
-                and word not in bad_words
-                and len(word) > 2
-                and word.isalpha()
-                and word not in self.tried_words)
+            # Add multiple copies based on weight
+            weighted_words.extend([word] * int(weight * 3 if is_positive else weight))
+
+        return weighted_words
+
+    def make_next_guess_directional(self, topn=100):
+        if len(self.guesses_dict) < 2:
+            seeds = ['time', 'person', 'year', 'way', 'day']
+            candidates = []
+            for seed in seeds:
+                try:
+                    similar = self.word_model.most_similar(seed, topn=20)
+                    candidates.extend([(word, score) for word, score in similar
+                                       if self.is_valid_word(word)])
+                except KeyError:
+                    continue
+            return candidates[:topn]
+
+        sorted_guesses = sorted(self.guesses_dict.items(), key=lambda x: x[1])
+        min_score = sorted_guesses[0][1]
+        max_score = sorted_guesses[-1][1]
+        score_range = max_score - min_score if max_score != min_score else 1
+
+        # Calculate weighted words
+        best_words_weighted = self.calculate_word_weights(
+            sorted_guesses, 3, score_range, min_score, max_score, is_positive=True)
+        worst_words_weighted = self.calculate_word_weights(
+            sorted_guesses, 3, score_range, min_score, max_score, is_positive=False)
+
+        try:
+            similar_words = self.word_model.most_similar(
+                positive=best_words_weighted,
+                negative=worst_words_weighted,
+                topn=topn * 2
+            )
+            return [(word, score) for word, score in similar_words
+                    if self.is_valid_word(word)][:topn]
+
+        except KeyError as e:
+            logging.error(f"Error in directional guessing: {e}")
+            return []
+
+    def make_next_guess_refined(self, topn=100, score_threshold=100):
+        """Refined guessing strategy for when we're getting closer to the target."""
+        best_score = min(self.guesses_dict.values()) if self.guesses_dict else float('inf')
+        best_word = min(self.guesses_dict.items(), key=lambda x: x[1])[0] if self.guesses_dict else None
+
+        sorted_guesses = sorted(self.guesses_dict.items(), key=lambda x: x[1])
+        min_score = sorted_guesses[0][1]
+        max_score = sorted_guesses[-1][1]
+        score_range = max_score - min_score if max_score != min_score else 1
+
+        if best_score <= 50:
+            logging.info(f"Very close with word '{best_word}' (score: {best_score}). Using fine refinement.")
+            try:
+                # Get weighted versions of nearby words
+                best_words_weighted = self.calculate_word_weights(
+                    sorted_guesses, 5, score_range, min_score, max_score, is_positive=True)
+
+                candidates = []
+                for word in best_words_weighted:
+                    try:
+                        similar = self.word_model.most_similar(word, topn=10)
+                        candidates.extend(similar)
+                    except KeyError:
+                        continue
+
+                # Deduplicate while keeping highest scores
+                seen = {}
+                for word, score in candidates:
+                    if self.is_valid_word(word):
+                        if word not in seen or score > seen[word]:
+                            seen[word] = score
+
+                unique_candidates = [(word, score) for word, score in seen.items()]
+                unique_candidates.sort(key=lambda x: x[1], reverse=True)
+                return unique_candidates[:topn]
+
+            except Exception as e:
+                logging.error(f"Error in fine refinement: {e}")
+                return self.make_next_guess_directional(topn)
+
+        # If score is good but not excellent, use weighted directional
+        best_words_weighted = self.calculate_word_weights(
+            sorted_guesses, 4, score_range, min_score, max_score, is_positive=True)
+        worst_words_weighted = self.calculate_word_weights(
+            sorted_guesses, 2, score_range, min_score, max_score, is_positive=False)
+
+        try:
+            similar_words = self.word_model.most_similar(
+                positive=best_words_weighted,
+                negative=worst_words_weighted,
+                topn=topn * 2
+            )
+            return [(word, score) for word, score in similar_words
+                    if self.is_valid_word(word)][:topn]
+        except Exception as e:
+            logging.error(f"Error in refined directional guessing: {e}")
+            return self.make_next_guess_directional(topn)
 
     def make_diverse_guesses(self, candidates, n_clusters=5):
         if not candidates:
@@ -130,168 +301,20 @@ class ContextoSolver:
             logging.error(f"Error in clustering: {e}")
             return words[:n_clusters]
 
-    def make_next_guess_directional(self, topn=100):
-        if len(self.guesses_dict) < 2:
-            seeds = ['time', 'person', 'year', 'way', 'day']
-            candidates = []
-            for seed in seeds:
-                try:
-                    similar = self.word_model.most_similar(seed, topn=20)
-                    candidates.extend([(word, score) for word, score in similar
-                                       if self.is_valid_word(word)])
-                except KeyError:
-                    continue
-            return candidates[:topn]
-
-        sorted_guesses = sorted(self.guesses_dict.items(), key=lambda x: x[1])
-        best_words = [word for word, _ in sorted_guesses[:3]]
-        worst_words = [word for word, _ in sorted_guesses[-3:]]
-
-        try:
-            similar_words = self.word_model.most_similar(
-                positive=best_words,
-                negative=worst_words,
-                topn=topn * 2
-            )
-            valid_words = [(word, score) for word, score in similar_words
-                           if self.is_valid_word(word)]
-            return valid_words[:topn]
-
-        except KeyError as e:
-            logging.error(f"Error in directional guessing: {e}")
-            return []
-
-    def make_next_guess_refined(self, topn=100, score_threshold=100):
-        best_score = min(self.guesses_dict.values()) if self.guesses_dict else float('inf')
-        best_word = min(self.guesses_dict.items(), key=lambda x: x[1])[0] if self.guesses_dict else None
-
-        # Ultra-fine refinement for very good scores
-        if best_score <= 20:
-            logging.info(f"Very close with word '{best_word}' (score: {best_score}). Using ultra-fine refinement.")
-
-            # Get most recent guess
-            recent_guesses = sorted([(word, score) for word, score in self.guesses_dict.items()],
-                                    key=lambda x: len(self.tried_words - {x[0]}))
-
-            if len(recent_guesses) >= 2:
-                last_word, last_score = recent_guesses[-1]
-
-                # If last guess was significantly worse
-                if last_score > best_score * 2:
-                    logging.info(f"Last guess '{last_word}' (score: {last_score}) was much worse. Reversing direction.")
-
-                    try:
-                        # Get vectors and move in opposite direction
-                        best_vector = self.word_model[best_word]
-                        last_vector = self.word_model[last_word]
-
-                        # Create multiple small steps in opposite direction
-                        direction = best_vector - last_vector
-                        candidates = []
-
-                        # Try multiple small steps in opposite direction
-                        for step in [0.05, 0.1, 0.15]:
-                            new_vector = best_vector + (direction * step)
-                            new_vector = new_vector / np.linalg.norm(new_vector)
-                            similar = self.word_model.similar_by_vector(new_vector, topn=20)
-                            candidates.extend([(word, score) for word, score in similar
-                                               if self.is_valid_word(word)])
-
-                        if candidates:
-                            return candidates[:topn]
-                    except Exception as e:
-                        logging.error(f"Error in direction reversal: {e}")
-
-            # Very fine exploration around best word
-            try:
-                steps = [0.05, 0.1, 0.15]
-                candidates = []
-                base_vector = self.word_model[best_word]
-
-                for step in steps:
-                    # Explore multiple directions around the best word
-                    for angle in [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi]:
-                        # Create a slightly rotated version of the vector
-                        rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)],
-                                                    [np.sin(angle), np.cos(angle)]])
-                        rotated_direction = np.dot(rotation_matrix, base_vector[:2])
-                        new_vector = base_vector.copy()
-                        new_vector[:2] = rotated_direction
-                        new_vector = new_vector + (new_vector * step)
-                        new_vector = new_vector / np.linalg.norm(new_vector)
-
-                        similar = self.word_model.similar_by_vector(new_vector, topn=10)
-                        candidates.extend([(word, score) for word, score in similar
-                                           if self.is_valid_word(word)])
-
-                if candidates:
-                    return candidates[:topn]
-
-            except Exception as e:
-                logging.error(f"Error in ultra-fine refinement: {e}")
-
-        # Regular refinement for good but not excellent scores
-        good_words = [(word, score) for word, score in self.guesses_dict.items()
-                      if score < score_threshold]
-
-        if not good_words:
-            return self.make_next_guess_directional(topn)
-
-        good_words = sorted(good_words, key=lambda x: x[1])[:3]
-        total_inverse_score = sum(1 / score for _, score in good_words)
-        weights = [(word, (1 / score) / total_inverse_score) for word, score in good_words]
-
-        logging.info(f"Using weighted refinement with words: {weights}")
-
-        try:
-            candidates = []
-            steps = [0.1, 0.15, 0.2, 0.25, 0.3]
-
-            for word, weight in weights:
-                base_vector = self.word_model[word]
-                weighted_steps = [step * weight for step in steps]
-
-                for step in weighted_steps:
-                    new_vector = base_vector + (base_vector * step)
-                    new_vector = new_vector / np.linalg.norm(new_vector)
-
-                    similar = self.word_model.similar_by_vector(new_vector, topn=20)
-                    candidates.extend([(word, score) for word, score in similar
-                                       if self.is_valid_word(word)])
-
-                    inward_vector = base_vector - (base_vector * step)
-                    inward_vector = inward_vector / np.linalg.norm(inward_vector)
-
-                    similar = self.word_model.similar_by_vector(inward_vector, topn=20)
-                    candidates.extend([(word, score) for word, score in similar
-                                       if self.is_valid_word(word)])
-
-            seen = {}
-            for word, score in candidates:
-                if word not in seen or score > seen[word]:
-                    seen[word] = score
-
-            unique_candidates = [(word, score) for word, score in seen.items()]
-            unique_candidates.sort(key=lambda x: x[1], reverse=True)
-
-            return unique_candidates[:topn]
-
-        except Exception as e:
-            logging.error(f"Error in refined guessing: {e}")
-            return []
+    def is_valid_word(self, word):
+        word = word.lower()
+        bad_words = {"first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+                     "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}
+        return (word in self.english_words
+                and word not in bad_words
+                and len(word) > 2
+                and word.isalpha()
+                and word not in self.tried_words)
 
     def play_game(self):
-        initial_probes = ['thing', 'place', 'time', 'person', 'animal']
-        logging.info("Starting game with probe words: " + str(initial_probes))
-
-        for guess in initial_probes:
-            if guess.lower() not in self.tried_words:
-                self.tried_words.add(guess.lower())
-                word, score = self.driver.guessWord(guess)
-                if word is not None and score is not None:
-                    self.guesses_dict[word.lower()] = score
-                    logging.info(f"Probe guess: {word} - Score: {score}")
-                time.sleep(1)
+        """Main game loop with adaptive probing."""
+        logging.info("Starting game with adaptive probing")
+        best_probe_score = self.adaptive_probing()
 
         consecutive_failures = 0
         guess_count = len(self.guesses_dict)
@@ -304,9 +327,6 @@ class ContextoSolver:
                 if current_best_score < 100 and not in_refinement_phase:
                     logging.info(f"Switching to refinement phase! Best score: {current_best_score}")
                     in_refinement_phase = True
-
-                if in_refinement_phase:
-                    logging.info(f"Using refinement strategy (best score: {current_best_score})")
                     candidates = self.make_next_guess_refined(topn=100)
                 else:
                     logging.info("Using directional strategy")
@@ -318,7 +338,7 @@ class ContextoSolver:
 
                     if consecutive_failures >= 10:
                         logging.error("Too many consecutive failures. Exiting the game.")
-                        raise RuntimeError("Too many consecutive failures. Exiting the game.")
+                        raise RuntimeError("Too many consecutive failures")
 
                     if consecutive_failures > 5:
                         common_words = ["world", "life", "work", "system", "group"]
@@ -336,8 +356,8 @@ class ContextoSolver:
                         word, score = self.driver.guessWord(guess)
                         if word is not None and score is not None:
                             self.guesses_dict[word.lower()] = score
-                            logging.info(f"Guess #{guess_count + 1}: {word} - Score: {score} " +
-                                         f"(Phase: {'Refinement' if in_refinement_phase else 'Directional'})")
+                            logging.info(f"Guess #{guess_count + 1}: {word} - Score: {score} "
+                                         + f"(Phase: {'Refinement' if in_refinement_phase else 'Directional'})")
                             guess_count += 1
                             consecutive_failures = 0
                             valid_guess_found = True
@@ -360,21 +380,28 @@ class ContextoSolver:
 
         except RuntimeError as e:
             logging.error(f"Game terminated due to error: {e}")
-            return -1  # Return a special code for termination due to error
+            return -1
 
     def cleanup(self):
         self.driver.quitDriver()
+
+    def log_results(self, game_number, guess_count, winning_guess):
+        if not os.path.exists(self.api_log_file):
+            with open(self.api_log_file, "w") as f:
+                f.write("Timestamp,GameNumber,GuessCount,WinningGuess\n")
+
+        with open(self.api_log_file, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{game_number},{guess_count},{winning_guess}\n")
 
     def log(self, logTitle, guesses):
         log_file = os.path.join(self.script_dir, "log.txt")
         with open(log_file, "a") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Game #{self.game_number} - {guesses} guesses\n")
         logging.info(f"Game logged: {logTitle} - {guesses} guesses")
-        print(f"Logged to: {log_file}")  # Debug print
 
 
 def main():
-    solver = ContextoSolver(webDriver="API", gameNumber=800)
+    solver = ContextoSolver(webDriver="API", gameNumber=805)
     try:
         guesses = solver.play_game()
         if guesses == -1:
