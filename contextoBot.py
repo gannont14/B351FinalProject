@@ -46,7 +46,10 @@ class ContextoSolver:
             nltk.download('words', quiet=True)
             from nltk.corpus import words
             self.english_words = set(w.lower() for w in words.words())
-            print(f"Word bank contains: {len(self.english_words)} words")
+            print(f"Downloaded word bank contains: {len(self.english_words)} words")
+            self.valid_words = {word for word in self.english_words if word in self.word_model}
+            print(f"Word model contains: {len(self.word_model)} words")
+            print(f"Precomputed valid words: {len(self.valid_words)} words")
         except Exception as e:
             logging.error(f"Error loading English words: {e}")
             self.english_words = set(api.load('models/word2vec-google-news-300').index_to_key[:50000])
@@ -77,15 +80,16 @@ class ContextoSolver:
                 f.write("Timestamp,GameNumber,GuessCount,WinningGuess\n")  # Add CSV header
             print(f"Created {self.api_log_file}")  # Debug print
 
-    def log_results(self, game_number, guess_count, winning_guess):
+    def log_results(self, game_number, guess_count, winning_guess, failed=False):
         # Log results in the API log file
         if not os.path.exists(self.api_log_file):
             with open(self.api_log_file, "w") as f:
-                f.write("Timestamp,GameNumber,GuessCount,WinningGuess\n")
+                f.write("Timestamp,GameNumber,GuessCount,WinningGuess,Status\n")  # Updated header to include Status
             print("Created API results log file.")  # Debug print
 
+        status = "FAILED" if failed else "COMPLETED"  # Mark status as FAILED or COMPLETED
         with open(self.api_log_file, "a") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{game_number},{guess_count},{winning_guess}\n")
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{game_number},{guess_count},{winning_guess},{status}\n")
         print(f"Logged results to: {self.api_log_file}")  # Debug print
 
 
@@ -93,7 +97,7 @@ class ContextoSolver:
         word = word.lower()
         bad_words = {"first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
                      "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"}
-        return (word in self.english_words
+        return (word in self.valid_words
                 and word not in bad_words
                 and len(word) > 2
                 and word.isalpha()
@@ -221,17 +225,14 @@ class ContextoSolver:
                 base_vector = self.word_model[best_word]
 
                 for step in steps:
-                    # Explore multiple directions around the best word
-                    for angle in [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi]:
-                        # Create a slightly rotated version of the vector
-                        rotation_matrix = np.array([
-                            [np.cos(angle), -np.sin(angle)],
-                            [np.sin(angle), np.cos(angle)]
-                        ])
-                        rotated_direction = rotation_matrix.dot(base_vector)
-                        new_vector = rotated_direction * step
-                        new_vector = new_vector / np.linalg.norm(new_vector)
+                    # Explore multiple perturbations around the best word
+                    for _ in range(5):  # Introduce slight random variations
+                        # Generate a small random perturbation vector
+                        perturbation = np.random.normal(0, step, size=base_vector.shape)
+                        new_vector = base_vector + perturbation
+                        new_vector = new_vector / np.linalg.norm(new_vector)  # Normalize the vector
 
+                        # Find words similar to the perturbed vector
                         similar = self.word_model.similar_by_vector(new_vector, topn=10)
                         candidates.extend([(word, score) for word, score in similar
                                            if self.is_valid_word(word)])
@@ -366,13 +367,15 @@ class ContextoSolver:
             if self.driver.checkIfGameOver():
                 winning_guess = min(self.guesses_dict, key=self.guesses_dict.get)
                 logging.info(f"Game completed in {guess_count} guesses! Winning guess: {winning_guess}")
-                self.log_results(self.driver.gameNum, guess_count, winning_guess)
+                self.log_results(self.driver.gameNum, guess_count, winning_guess, failed=False)
             else:
                 logging.info(f"Game stopped after {guess_count} guesses without finding solution")
+                self.log_results(self.driver.gameNum, guess_count, "N/A", failed=True)
             return guess_count
 
         except RuntimeError as e:
             logging.error(f"Game terminated due to error: {e}")
+            self.log_results(self.driver.gameNum, guess_count, "N/A", failed=True)  # Log failed game
             return -1  # Return a special code for termination due to error
 
     def cleanup(self):
@@ -387,7 +390,7 @@ class ContextoSolver:
 
 
 def main():
-    solver = ContextoSolver(webDriver="API", gameNumber=randint(1,814))
+    solver = ContextoSolver(webDriver="API", gameNumber=102)
     try:
         guesses = solver.play_game()
         if guesses == -1:
