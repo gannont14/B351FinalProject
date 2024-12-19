@@ -39,6 +39,7 @@ class APIDriver:
     def selectGameByGameNumber(self, gameNum=None):
         if gameNum is None:
             gameNum = random.randint(1, 811)
+        self.gameNum = gameNum
 
         self.gameNumber = gameNum
 

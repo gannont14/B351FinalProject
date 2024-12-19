@@ -1,4 +1,5 @@
 import os
+import sys
 from random import randint
 
 import numpy as np
@@ -15,6 +16,7 @@ from WikipediaVectors import WikipediaVectors
 
 class ContextoSolver:
     def __init__(self, webDriver="Firefox", gameNumber=None):
+        self.model_number = "Model 3.0"
         vectors = WikipediaVectors()
         if vectors.model is None:
             raise RuntimeError("Failed to load or train Word2Vec model")
@@ -28,7 +30,6 @@ class ContextoSolver:
         self.api_log_file = os.path.join(self.script_dir, "API_results.log")
         self.api_driver_log_file = os.path.join(self.script_dir, "api_driver.log")
         self.game_number = gameNumber
-
 
         # updated to be able to use the API driver as well
         if webDriver == "API":
@@ -77,21 +78,20 @@ class ContextoSolver:
         # Ensure API results log exists
         if not os.path.exists(self.api_log_file):
             with open(self.api_log_file, 'a') as f:
-                f.write("Timestamp,GameNumber,GuessCount,WinningGuess\n")  # Add CSV header
+                f.write("Timestamp,GameNumber,GuessCount,WinningGuess,Status,Model\n")  # Add CSV header
             print(f"Created {self.api_log_file}")  # Debug print
 
     def log_results(self, game_number, guess_count, winning_guess, failed=False):
         # Log results in the API log file
         if not os.path.exists(self.api_log_file):
             with open(self.api_log_file, "w") as f:
-                f.write("Timestamp,GameNumber,GuessCount,WinningGuess,Status\n")  # Updated header to include Status
+                f.write("Timestamp,GameNumber,GuessCount,WinningGuess,Status,Model\n")  # Updated header to include Status
             print("Created API results log file.")  # Debug print
 
-        status = "FAILED" if failed else "COMPLETED"  # Mark status as FAILED or COMPLETED
+        status = "FAILED" if failed else "COMPLETED"
         with open(self.api_log_file, "a") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{game_number},{guess_count},{winning_guess},{status}\n")
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{game_number},{guess_count},{winning_guess},{status},{self.model_number}\n")
         print(f"Logged results to: {self.api_log_file}")  # Debug print
-
 
     def is_valid_word(self, word: str) -> bool:
         word = word.lower()
@@ -132,7 +132,6 @@ class ContextoSolver:
             for i in range(min(n_clusters, len(vectors))):
                 cluster_words = [word for j, word in enumerate(valid_words) if clusters[j] == i]
                 if cluster_words:
-                    # Select top `words_per_cluster` words from each cluster
                     top_words = cluster_words[:words_per_cluster]
                     diverse_guesses.extend(top_words)
                     logging.debug(f"Selected {len(top_words)} words from cluster {i}: {top_words}")
@@ -143,7 +142,6 @@ class ContextoSolver:
         except Exception as e:
             logging.error(f"Error in clustering: {e}")
             return words[:n_clusters * words_per_cluster]
-
 
     def make_next_guess_directional(self, topn=100):
         if len(self.guesses_dict) < 2:
@@ -180,72 +178,66 @@ class ContextoSolver:
         best_score = min(self.guesses_dict.values()) if self.guesses_dict else float('inf')
         best_word = min(self.guesses_dict.items(), key=lambda x: x[1])[0] if self.guesses_dict else None
 
-        # Ultra-fine refinement for very good scores
         if best_score <= 20:
             logging.info(f"Very close with word '{best_word}' (score: {best_score}). Using ultra-fine refinement.")
-
-            # Get most recent guess
             recent_guesses = sorted([(word, score) for word, score in self.guesses_dict.items()],
                                     key=lambda x: len(self.tried_words - {x[0]}))
 
             if len(recent_guesses) >= 2:
                 last_word, last_score = recent_guesses[-1]
-
-                # If last guess was significantly worse
                 if last_score > best_score * 2:
                     logging.info(f"Last guess '{last_word}' (score: {last_score}) was much worse. Reversing direction.")
-
                     try:
-                        # Get vectors and move in opposite direction
                         best_vector = self.word_model[best_word]
                         last_vector = self.word_model[last_word]
-
-                        # Create multiple small steps in opposite direction
                         direction = best_vector - last_vector
                         candidates = []
-
-                        # Try multiple small steps in opposite direction
                         for step in [0.05, 0.1, 0.15]:
                             new_vector = best_vector + (direction * step)
                             new_vector = new_vector / np.linalg.norm(new_vector)
                             similar = self.word_model.similar_by_vector(new_vector, topn=20)
                             candidates.extend([(word, score) for word, score in similar
                                                if self.is_valid_word(word)])
-
                         if candidates:
                             return candidates[:topn]
                     except Exception as e:
                         logging.error(f"Error in direction reversal: {e}")
 
-            # Very fine exploration around best word
-            # Very fine exploration around best word
             try:
                 steps = [0.05, 0.1, 0.15]
                 candidates = []
                 base_vector = self.word_model[best_word]
-
                 for step in steps:
-                    # Explore multiple perturbations around the best word
-                    for _ in range(5):  # Introduce slight random variations
-                        # Generate a small random perturbation vector
+                    for _ in range(5):
                         perturbation = np.random.normal(0, step, size=base_vector.shape)
                         new_vector = base_vector + perturbation
-                        new_vector = new_vector / np.linalg.norm(new_vector)  # Normalize the vector
-
-                        # Find words similar to the perturbed vector
+                        new_vector = new_vector / np.linalg.norm(new_vector)
                         similar = self.word_model.similar_by_vector(new_vector, topn=10)
                         candidates.extend([(word, score) for word, score in similar
                                            if self.is_valid_word(word)])
-
                 if candidates:
                     return candidates[:topn]
-
             except Exception as e:
                 logging.error(f"Error in ultra-fine refinement: {e}")
 
-        # Regular refinement for good but not excellent scores
         good_words = [(word, score) for word, score in self.guesses_dict.items()
                       if score < score_threshold]
+
+        # BEGIN MODIFICATIONS
+        # Add multiple seed words for the refinement phase
+        # If we're in refinement and best_score <= score_threshold (but > 20), try multiple seeds:
+        if best_score <= score_threshold and best_score > 20:
+            best_words = [w for w, s in sorted(self.guesses_dict.items(), key=lambda x: x[1])[:3]]
+            logging.info(f"Refinement phase using multiple best words: {best_words}")
+            try:
+                similar_words = self.word_model.most_similar(positive=best_words, topn=topn * 2)
+                valid_words = [(word, score) for word, score in similar_words if self.is_valid_word(word)]
+                if valid_words:
+                    return valid_words[:topn]
+            except KeyError as e:
+                logging.error(f"Error in refined guessing with multiple seeds: {e}")
+
+        # END MODIFICATIONS
 
         if not good_words:
             return self.make_next_guess_directional(topn)
@@ -267,14 +259,12 @@ class ContextoSolver:
                 for step in weighted_steps:
                     new_vector = base_vector + (base_vector * step)
                     new_vector = new_vector / np.linalg.norm(new_vector)
-
                     similar = self.word_model.similar_by_vector(new_vector, topn=20)
                     candidates.extend([(word, score) for word, score in similar
                                        if self.is_valid_word(word)])
 
                     inward_vector = base_vector - (base_vector * step)
                     inward_vector = inward_vector / np.linalg.norm(inward_vector)
-
                     similar = self.word_model.similar_by_vector(inward_vector, topn=20)
                     candidates.extend([(word, score) for word, score in similar
                                        if self.is_valid_word(word)])
@@ -390,7 +380,7 @@ class ContextoSolver:
 
 
 def main():
-    solver = ContextoSolver(webDriver="API", gameNumber=102)
+    solver = ContextoSolver(webDriver="API", gameNumber=randint(1,814))
     try:
         guesses = solver.play_game()
         if guesses == -1:
